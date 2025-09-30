@@ -87,12 +87,16 @@
 
     <!-- Modals -->
     <div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center hidden"><div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-white"></div></div>
+    
+    <!-- ALERT MODAL -->
     <div id="alertModal" class="fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4 hidden">
         <div id="alertBox" class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center transform transition-all scale-95 opacity-0">
             <p id="alertMessage" class="text-lg mb-4"></p>
             <button onclick="closeAlert()" class="gz-primary-btn hover:opacity-90 font-bold py-2 px-6 rounded-lg shadow-md">OK</button>
         </div>
     </div>
+    
+    <!-- CONFIRMATION MODAL -->
     <div id="confirmModal" class="fixed inset-0 bg-black bg-opacity-60 z-40 flex items-center justify-center p-4 hidden">
         <div id="confirmBox" class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center transform transition-all scale-95 opacity-0">
             <p id="confirmMessage" class="text-lg mb-6"></p>
@@ -102,8 +106,21 @@
             </div>
         </div>
     </div>
+    
+    <!-- GENERIC FORM/DETAILS MODAL -->
     <div id="formModal" class="fixed inset-0 bg-black bg-opacity-60 z-30 flex items-center justify-center p-4 hidden">
         <!-- Plan, User Edit, and User Details modal content injected by JS -->
+    </div>
+    
+    <!-- WHATSAPP BONUS MODAL (NEW) -->
+    <div id="whatsappBonusModal" class="fixed inset-0 bg-black bg-opacity-70 z-40 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md text-center">
+            <i class="fab fa-whatsapp text-6xl text-[#6BCB77] mb-4 animate-bounce"></i>
+            <h3 class="text-2xl font-bold mb-3 text-[#4D96FF]">🎉 PKR 50 Sign-up Bonus!</h3>
+            <p class="text-gray-600 mb-6">Enter your 11-digit WhatsApp number below to claim your one-time bonus and stay connected for important updates.</p>
+            <input id="whatsappNumberInput" type="text" placeholder="Enter 11-digit WhatsApp Number (e.g., 03001234567)" class="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 focus:ring-2 focus:ring-[#6BCB77] mb-4">
+            <button onclick="submitWhatsappNumber()" class="gz-primary-btn w-full font-bold py-3 rounded-lg shadow-md hover:opacity-90">Claim PKR 50 Bonus</button>
+        </div>
     </div>
 
 
@@ -551,7 +568,8 @@
                     totalProfit: 0,
                     paidReferralsCount: 0,
                     hasMadeFirstPurchase: false,
-                    referralProcessed: !!referralCode
+                    referralProcessed: !!referralCode,
+                    whatsappNumber: null // New field
                 };
                 await setDoc(userRef, userData);
                 if (referralCode) {
@@ -602,6 +620,7 @@
                     renderWithdrawPage(currentUserData);
                     if (plansSnapshot) renderPlans(plansSnapshot);
                     handlePostGoogleSignupReferral();
+                    renderWhatsappBonusModal(currentUserData); // Check for bonus
                 }
             }));
             unsubscribes.push(onSnapshot(query(collection(db, 'users', user.uid, 'history'), orderBy('timestamp', 'desc')), snap => {
@@ -1134,6 +1153,64 @@
             }
         };
         
+        // --- NEW WHATSAPP BONUS LOGIC ---
+        
+        function renderWhatsappBonusModal(data) {
+            const modal = document.getElementById('whatsappBonusModal');
+            if (!data || data.whatsappNumber) {
+                // If the number is already set, hide the modal permanently
+                modal.classList.add('hidden');
+                return;
+            }
+            // Show the modal if the number is not set
+            modal.classList.remove('hidden');
+        }
+
+        window.submitWhatsappNumber = async function() {
+            const number = document.getElementById('whatsappNumberInput').value.trim();
+            const cleanedNumber = number.startsWith('92') ? '0' + number.substring(2) : number; // Handle 92 prefix if entered by user
+
+            // Validation: Must be exactly 11 digits (e.g., 03001234567)
+            if (!/^\d{11}$/.test(cleanedNumber)) {
+                return showAlert("Please enter a valid 11-digit WhatsApp number (e.g., 03001234567).");
+            }
+
+            const bonusAmount = 50;
+            showLoading();
+
+            try {
+                const userRef = doc(db, 'users', currentUser.uid);
+                
+                const batch = writeBatch(db);
+
+                // 1. Update user data (number and balance)
+                batch.update(userRef, {
+                    whatsappNumber: cleanedNumber,
+                    balance: increment(bonusAmount)
+                });
+
+                // 2. Log history
+                batch.set(doc(collection(userRef, 'history')), {
+                    type: 'Sign-up Bonus',
+                    amount: bonusAmount,
+                    description: 'PKR 50 bonus for WhatsApp number entry',
+                    timestamp: serverTimestamp()
+                });
+
+                await batch.commit();
+                
+                document.getElementById('whatsappBonusModal').classList.add('hidden');
+                showAlert(`Successfully claimed PKR ${bonusAmount}! Your balance has been updated.`);
+
+            } catch (e) {
+                console.error("Error submitting WhatsApp number:", e);
+                showAlert("Error submitting number. Please try again.");
+            } finally {
+                hideLoading();
+            }
+        }
+        // --- END NEW WHATSAPP BONUS LOGIC ---
+
         function renderEarn(data) {
              const earnSection = document.getElementById('earn');
              if(!earnSection || !data) return;
@@ -1730,6 +1807,28 @@
             }).join('<hr class="my-2">');
         }
         
+        // Function to copy a single number
+        window.copySingleWhatsapp = function(number) {
+            document.execCommand('copy', false, number); // Using deprecated command for iframe compatibility
+            showAlert(`Copied WhatsApp number: ${number}`);
+        };
+
+        // Function to copy all numbers
+        window.copyAllWhatsappNumbers = function() {
+            const allNumbers = allUsers.map(doc => doc.data().whatsappNumber).filter(n => n).join('\n');
+            if (!allNumbers) return showAlert("No WhatsApp numbers available to copy.");
+
+            // Create a temporary input field to copy the text
+            const tempInput = document.createElement('textarea');
+            tempInput.value = allNumbers;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+
+            showAlert(`Copied ${allNumbers.split('\n').length} WhatsApp numbers!`);
+        }
+
         function renderUsersList(docs) {
              const container = document.getElementById('admin-users');
              if(!container) return;
@@ -1737,12 +1836,15 @@
                  <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
                      <div>
                          <h2 class="text-2xl font-bold">User Management</h2>
-                         <p class="text-gray-500">Edit user balances and block or unblock their access.</p>
+                         <p class="text-gray-500">Edit user balances, manage status, and contact info.</p>
                      </div>
-                     <input type="text" id="userSearchInput" placeholder="Search by name or email..." class="w-full md:w-72 px-4 py-2 border rounded-lg">
+                     <div class="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                        <button onclick="copyAllWhatsappNumbers()" class="gz-primary-btn px-4 py-2 text-sm rounded-lg hover:opacity-90">Copy All WhatsApp Numbers</button>
+                        <input type="text" id="userSearchInput" placeholder="Search by name or email..." class="w-full md:w-72 px-4 py-2 border rounded-lg">
+                     </div>
                  </div>
                  <div class="overflow-x-auto"><table class="min-w-full text-left">
-                     <thead class="bg-gray-50"><tr class="border-b"><th class="p-3">User</th><th class="p-3">Balance</th><th class="p-3">Total Profit</th><th class="p-3">Plan</th><th class="p-3">Referrals</th><th class="p-3">Status</th><th class="p-3">Actions</th></tr></thead>
+                     <thead class="bg-gray-50"><tr class="border-b"><th class="p-3">User/Contact</th><th class="p-3">Balance</th><th class="p-3">Total Profit</th><th class="p-3">Plan</th><th class="p-3">Referrals</th><th class="p-3">Status</th><th class="p-3">Actions</th></tr></thead>
                      <tbody id="users-table-body"></tbody>
                  </table></div>`;
             
@@ -1762,10 +1864,16 @@
                 const user = doc.data();
                 const isBlocked = user.isBlocked || false;
                 const planText = (user.activePlans && user.activePlans.length > 0) ? `${user.activePlans.length} Active` : 'None';
+                const whatsappNumber = user.whatsappNumber || 'N/A';
+                
                 return `<tr class="border-b even:bg-gray-50 hover:bg-[#FFD93D] hover:bg-opacity-10">
                     <td class="p-3">
                         <p class="font-semibold">${user.username}</p>
                         <p class="text-sm text-gray-500">${user.email}</p>
+                        <p class="text-xs text-gray-600 mt-1 flex items-center">
+                            WA: ${whatsappNumber} 
+                            ${whatsappNumber !== 'N/A' ? `<button onclick="copySingleWhatsapp('${whatsappNumber}')" class="text-[#4D96FF] hover:text-[#9D4EDD] text-xs font-bold ml-1">Copy</button>` : ''}
+                        </p>
                     </td>
                     <td class="p-3">PKR ${user.balance.toFixed(2)}</td>
                     <td class="p-3">PKR ${(user.totalProfit || 0).toFixed(2)}</td>
@@ -1799,6 +1907,7 @@
             formModal.innerHTML = `
                 <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" onclick="event.stopPropagation()">
                     <h3 class="text-xl font-bold mb-6">User Details: ${user.username}</h3>
+                    <p class="mb-4"><strong>WhatsApp:</strong> ${user.whatsappNumber || 'N/A'}</p>
                     <h4 class="font-semibold mb-2">Invited Users (${(user.invitedUsers && user.invitedUsers.length) || 0})</h4>
                     <div class="bg-gray-50 p-4 rounded-md max-h-60 overflow-y-auto custom-scrollbar">${inviteeListHTML}</div>
                     <div class="mt-6 flex justify-end gap-3">
